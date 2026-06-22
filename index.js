@@ -29,6 +29,7 @@ async function run() {
 
     const db = client.db("fable_db");
     const ebooksCollection = db.collection("ebooks");
+    const usersCollection = db.collection("user");
 
 
 
@@ -37,7 +38,23 @@ async function run() {
         res.json(ebooks);   
     });
 
-    
+    app.get('/api/feat-ebooks', async (req, res) => {
+        const ebooks = await ebooksCollection.find().limit(6).toArray();
+        res.json(ebooks);   
+    });
+
+    app.get('/api/writers', async (req, res) => {
+        const query = { role: "writer" };
+        const writers = await usersCollection.find(query).limit(3).toArray();
+        res.json(writers);   
+    });
+
+    app.get('/api/users', async (req, res) => {
+        const users = await usersCollection.find().toArray();
+        res.json(users);   
+    });
+
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
