@@ -47,14 +47,17 @@ async function run() {
       if (req.query.genre) {
         query.genre = req.query.genre
       }
-      if (req.query.sort) {
-        query.sort = req.query.sort
+      let sortOptions = {};
+      if (req.query.sort === 'new') {
+        sortOptions = { createdAt: -1 }; // -1 means Descending (Newest first)
+      } else if (req.query.sort === 'old') {
+        sortOptions = { createdAt: 1 };  // 1 means Ascending (Oldest first)
       }
-      const cursor = ebooksCollection.find(query);
+      const cursor = ebooksCollection.find(query).sort(sortOptions);
       const ebooks = await cursor.toArray();
       res.json(ebooks);
     });
-    
+
 
     app.get('/api/feat-ebooks', async (req, res) => {
       const ebooks = await ebooksCollection.find().skip(10).limit(6).toArray();
