@@ -15,11 +15,11 @@ app.get('/', (req, res) => {
 const uri = process.env.MONGO_DB_URI;;
 
 const client = new MongoClient(uri, {
-    serverApi: {
-        version: ServerApiVersion.v1,
-        strict: true,
-        deprecationErrors: true,
-    }
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  }
 });
 
 async function run() {
@@ -34,63 +34,81 @@ async function run() {
 
 
     app.get('/api/ebooks', async (req, res) => {
-        const ebooks = await ebooksCollection.find().skip(10).toArray();
-        res.json(ebooks);   
+      console.log('server side q', req.query)
+      const query = {};
+
+      // book filter related query
+      if (req.query.search) {
+        query.$or = [
+          { title: { $regex: req.query.search, $options: 'i' } },
+          { addedBy: { $regex: req.query.search, $options: 'i' } }
+        ]
+      }
+      if (req.query.genre) {
+        query.genre = req.query.genre
+      }
+      if (req.query.sort) {
+        query.sort = req.query.sort
+      }
+      const cursor = ebooksCollection.find(query);
+      const ebooks = await cursor.toArray();
+      res.json(ebooks);
     });
+    
 
     app.get('/api/feat-ebooks', async (req, res) => {
-        const ebooks = await ebooksCollection.find().skip(10).limit(6).toArray();
-        res.json(ebooks);   
+      const ebooks = await ebooksCollection.find().skip(10).limit(6).toArray();
+      res.json(ebooks);
     });
 
     app.get('/api/top-writers', async (req, res) => {
-        const query = { role: "writer" };
-        const writers = await usersCollection.find(query).limit(3).toArray();
-        res.json(writers);   
+      const query = { role: "writer" };
+      const writers = await usersCollection.find(query).limit(3).toArray();
+      res.json(writers);
     });
-    
+
     app.get('/api/writers', async (req, res) => {
-        const query = { role: "writer" };
-        const writers = await usersCollection.find(query).toArray();
-        res.json(writers);   
+      const query = { role: "writer" };
+      const writers = await usersCollection.find(query).toArray();
+      res.json(writers);
     });
 
     app.get('/api/users', async (req, res) => {
-        const users = await usersCollection.find().toArray();
-        res.json(users);   
+      const users = await usersCollection.find().toArray();
+      res.json(users);
     });
 
     app.post('/api/ebooks', async (req, res) => {
-        const ebook = req.body;
-        const newEbook = {
-          ...ebook,
-          createdAt: new Date()
-        }
-        const result = await ebooksCollection.insertOne(newEbook);
-        res.json(result);
+      const ebook = req.body;
+      const newEbook = {
+        ...ebook,
+        createdAt: new Date()
+      }
+      const result = await ebooksCollection.insertOne(newEbook);
+      res.json(result);
     });
 
     app.get('/api/ebooks/writer/:id', async (req, res) => {
-        const writerId = req.params.id;
-        const query = { addedBy: writerId };
-        const ebooks = await ebooksCollection.find(query).toArray();
-        res.json(ebooks);
+      const writerId = req.params.id;
+      const query = { addedBy: writerId };
+      const ebooks = await ebooksCollection.find(query).toArray();
+      res.json(ebooks);
     });
 
     app.get('/api/ebooks/:id', async (req, res) => {
-        const ebookId = req.params.id;
-        const query = { _id: new ObjectId(ebookId) };
-        const ebook = await ebooksCollection.findOne(query);
-        res.json(ebook);
+      const ebookId = req.params.id;
+      const query = { _id: new ObjectId(ebookId) };
+      const ebook = await ebooksCollection.findOne(query);
+      res.json(ebook);
     });
 
     app.patch('/api/ebooks/:id', async (req, res) => {
-        const ebookId = req.params.id;
-        const updatedData = req.body;
-        const query = { _id: new ObjectId(ebookId) };
-        const update = { $set: updatedData };
-        const result = await ebooksCollection.updateOne(query, update);
-        res.json(result);
+      const ebookId = req.params.id;
+      const updatedData = req.body;
+      const query = { _id: new ObjectId(ebookId) };
+      const update = { $set: updatedData };
+      const result = await ebooksCollection.updateOne(query, update);
+      res.json(result);
     });
 
 
