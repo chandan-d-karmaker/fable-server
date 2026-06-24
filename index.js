@@ -30,6 +30,7 @@ async function run() {
     const db = client.db("fable_db");
     const ebooksCollection = db.collection("ebooks");
     const usersCollection = db.collection("user");
+    const bookmarksCollection = db.collection("bookmarks");
 
 
 
@@ -112,6 +113,19 @@ async function run() {
       const update = { $set: updatedData };
       const result = await ebooksCollection.updateOne(query, update);
       res.json(result);
+    });
+
+    app.post('/api/ebooks/bookmark', async (req, res) => {
+      const bookmark = req.body;
+      const result = await bookmarksCollection.insertOne(bookmark);
+      res.json(result);
+    });
+
+    app.get('/api/ebooks/bookmark/:userId', async (req, res) => {
+      const userId = req.params.userId;
+      const query = { user: userId };
+      const bookmarks = await bookmarksCollection.find(query).toArray();
+      res.json(bookmarks);
     });
 
 
