@@ -31,6 +31,7 @@ async function run() {
     const ebooksCollection = db.collection("ebooks");
     const usersCollection = db.collection("user");
     const bookmarksCollection = db.collection("bookmarks");
+    const paymentCollection = db.collection("payments");
 
 
 
@@ -128,7 +129,40 @@ async function run() {
       res.json(bookmarks);
     });
 
+    app.delete('/api/ebooks/:id', async (req, res) => {
+      const ebookId = req.params.id;
+      const query = { _id: new ObjectId(ebookId) };
+      const result = await ebooksCollection.deleteOne(query);
+      res.json(result);
+    });
 
+    app.post('/api/payments', async (req, res) => {
+      const data = req.body;
+      const paymentInfo = {
+        ...data,
+        createdAt: new Date()
+      }
+
+      const result = await paymentCollection.insertOne(paymentInfo);
+
+    })
+
+    app.get('/api/purchase/:id', async (req, res) => {
+
+      const id = req.params.id;
+      console.log(id);
+      const query = {
+        writerId: id
+      }
+      const purchases = await paymentCollection.find(query).toArray();
+
+      if (purchases.length === 0) {
+        return res.json([]);
+      }
+      
+      res.json(purchases);
+
+    })
 
 
     // Send a ping to confirm a successful connection
