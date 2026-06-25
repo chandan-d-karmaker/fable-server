@@ -163,7 +163,7 @@ async function run() {
       res.json(ebooks);
     });
 
-    app.get('/api/ebooks/:id', verifyToken, async (req, res) => {
+    app.get('/api/ebooks/:id', async (req, res) => {
       const ebookId = req.params.id;
       const query = { _id: new ObjectId(ebookId) };
       const ebook = await ebooksCollection.findOne(query);
@@ -272,6 +272,27 @@ async function run() {
       };
       const result = await ebooksCollection.updateOne(query, update);
       res.json(result);
+    });
+
+    app.get('/api/purchases/check', async (req, res) => {
+      try {
+        const { userId, ebookId } = req.query;
+
+        if (!userId || !ebookId) {
+          return res.status(400).json({ message: "userId and ebookId are required" });
+        }
+
+        const purchase = await paymentCollection.findOne({
+          userId: userId,
+          ebookId: ebookId
+        });
+
+        return res.status(200).json({ hasPurchased: !!purchase });
+
+      } catch (error) {
+        console.error("Error checking purchase status:", error);
+        return res.status(500).json({ message: "Internal server error" });
+      }
     });
 
 
