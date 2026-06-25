@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
+const { createRemoteJWKSet, jwtVerify } = require('jose-cjs');
 const app = express()
 const port = 8080
 
@@ -22,6 +23,11 @@ const client = new MongoClient(uri, {
   }
 });
 
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.FRONTEND_URL}/api/auth/jwks`)
+  //   http://localhost:3000/api/auth/jwks
+)
+
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
@@ -32,8 +38,65 @@ async function run() {
     const usersCollection = db.collection("user");
     const bookmarksCollection = db.collection("bookmarks");
     const paymentCollection = db.collection("payments");
+    const sessionCollection = db.collection('session');
+
+    const verifyToken = async (req, res, next) => {
+
+      const authHeader = req?.headers?.authorization;
+
+      if (!authHeader) {
+        return res.status(401).json({ message: 'unauthorized' })
+      }
+      const token = authHeader.split(" ")[1]
+      if (!token) {
+        return res.status(401).json({ message: 'unauthorized' })
+      }
+      console.log(token);
+
+      try {
+        const { payload } = await jwtVerify(token, JWKS)
+        // console.log(payload);
+
+        const userId = payload.id;
+
+        const userQuery = {
+          _id: new ObjectId(userId)
+        }
+        const user = await usersCollection.findOne(userQuery);
+        if (!user) {
+          return res.status(401).send({ message: 'unauthorized access' })
+        }
+        // set data in the req object
+        req.user = user;
+        next()
+      } catch (error) {
+        return res.status(403).json({ message: "Forbidden" })
+      }
+
+    }
 
 
+    const verifyReader = async (req, res, next) => {
+      if (req.user?.role !== 'reader') {
+        return res.status(403).send({ message: 'forbidden access' })
+      }
+      next();
+    }
+
+    const verifyWriter = async (req, res, next) => {
+      if (req.user?.role !== 'writer') {
+        return res.status(403).send({ message: 'forbidden access' })
+      }
+      next();
+    }
+
+    // must be used after verifyToken middleware
+    const verifyAdmin = async (req, res, next) => {
+      if (req.user.role !== 'admin') {
+        return res.status(403).send({ message: 'forbidden access' })
+      }
+      next();
+    }
 
     app.get('/api/ebooks', async (req, res) => {
       console.log('server side q', req.query)
@@ -100,7 +163,7 @@ async function run() {
       res.json(ebooks);
     });
 
-    app.get('/api/ebooks/:id', async (req, res) => {
+    app.get('/api/ebooks/:id', verifyToken, async (req, res) => {
       const ebookId = req.params.id;
       const query = { _id: new ObjectId(ebookId) };
       const ebook = await ebooksCollection.findOne(query);
@@ -145,6 +208,8 @@ async function run() {
 
       const result = await paymentCollection.insertOne(paymentInfo);
 
+      res.json(result);
+
     })
 
     app.get('/api/purchase/:id', async (req, res) => {
@@ -159,10 +224,55 @@ async function run() {
       if (purchases.length === 0) {
         return res.json([]);
       }
-      
+
       res.json(purchases);
 
     })
+
+    app.get('/api/revenue/:id', async (req, res) => {
+      try {
+        const writerId = req.params.id;
+        // console.log("Calculating revenue for writer:", writerId);
+
+        const result = await paymentCollection.aggregate([
+
+          {
+            $match: { writerId: writerId }
+          },
+
+          {
+            $group: {
+              _id: null,
+              totalRevenue: {
+                $sum: { $toDouble: "$ebookPrice" }
+              }
+            }
+          }
+        ]).toArray();
+
+        const finalRevenue = result.length > 0 ? result[0].totalRevenue : 0;
+
+        // Send it back as a JSON object
+        res.json({ totalRevenue: finalRevenue });
+
+      } catch (error) {
+        console.error("Error calculating revenue:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+
+    app.patch('/api/ebooks/status/:id', async (req, res) => {
+      const ebookId = req.params.id;
+      const updatedData = req.body;
+      const query = { _id: new ObjectId(ebookId) };
+      const update =
+      {
+        $set:
+          { $status: updatedData.status }
+      };
+      const result = await ebooksCollection.updateOne(query, update);
+      res.json(result);
+    });
 
 
     // Send a ping to confirm a successful connection
