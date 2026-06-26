@@ -137,9 +137,57 @@ async function run() {
     });
 
     app.get('/api/top-writers', async (req, res) => {
-      const query = { role: "writer" };
-      const writers = await usersCollection.find(query).limit(3).toArray();
-      res.json(writers);
+      try {
+        const topWriters = await usersCollection.aggregate([
+          // 1. Get only writers
+          { $match: { role: "writer" } },
+
+          // 2. Lookup with a pipeline to force string-to-string comparison
+          {
+            $lookup: {
+              from: "payments",
+              let: { writer_id: { $toString: "$_id" } }, // Convert user _id to string
+              pipeline: [
+                {
+                  $match: {
+                    $expr: {
+                      // Compare payment writerId (converted to string) with the let variable
+                      $eq: [{ $toString: "$writerId" }, "$$writer_id"]
+                    }
+                  }
+                }
+              ],
+              as: "salesData"
+            }
+          },
+
+          // 3. Calculate total revenue and total sales
+          {
+            $project: {
+              writerName: "$name",
+              totalRevenue: {
+                $sum: {
+                  $map: {
+                    input: "$salesData",
+                    as: "sale",
+                    in: { $toDouble: "$$sale.ebookPrice" }
+                  }
+                }
+              },
+              totalSales: { $size: "$salesData" }
+            }
+          },
+
+          // 4. Sort and Limit
+          { $sort: { totalRevenue: -1 } },
+          { $limit: 3 }
+        ]).toArray();
+
+        res.json(topWriters);
+      } catch (error) {
+        console.error("Aggregation Error:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
     });
 
     app.get('/api/writers', async (req, res) => {
@@ -299,6 +347,68 @@ async function run() {
       }
     });
 
+    app.get('/api/admin/all-purchases', async (req, res) => {
+      try {
+        // console.log("Fetching all platform purchases for Admin...");
+
+        const pipeline = [
+          // 1. Notice there is NO $match stage here. We want everything!
+
+          // 2. Convert the string writerId into a true ObjectId
+          {
+            $addFields: {
+              writerObjectId: { $toObjectId: "$writerId" }
+            }
+          },
+          // 3. Join with the "user" collection to get the writer's details
+          {
+            $lookup: {
+              from: "user",
+              localField: "writerObjectId",
+              foreignField: "_id",
+              as: "writerDetails"
+            }
+          },
+          // 4. Flatten the array that $lookup creates
+          {
+            $unwind: {
+              path: "$writerDetails",
+              preserveNullAndEmptyArrays: true
+            }
+          },
+          // 5. Attach JUST the name to the root of the purchase object
+          {
+            $addFields: {
+              writerName: "$writerDetails.name"
+            }
+          },
+          // 6. Clean up: remove the full user object
+          {
+            $project: {
+              writerObjectId: 0,
+              writerDetails: 0
+            }
+          },
+          // 7. NEW: Sort by newest purchases first (descending order)
+          {
+            $sort: {
+              createdAt: -1
+            }
+          }
+        ];
+
+        // Execute the pipeline
+        const allPurchases = await paymentCollection.aggregate(pipeline).toArray();
+
+        // Send the final data to the frontend
+        res.json(allPurchases);
+
+      } catch (error) {
+        console.error("Error fetching all purchases for admin:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
+
     app.get('/api/revenue/:id', async (req, res) => {
       try {
         const writerId = req.params.id;
@@ -338,7 +448,7 @@ async function run() {
       const update =
       {
         $set:
-          { $status: updatedData.status }
+          { status: updatedData.status }
       };
       const result = await ebooksCollection.updateOne(query, update);
       res.json(result);
@@ -364,6 +474,55 @@ async function run() {
         return res.status(500).json({ message: "Internal server error" });
       }
     });
+
+    app.get('/api/admin/total-revenue', async (req, res) => {
+      try {
+        // console.log("Calculating total platform revenue for Admin...");
+
+        const result = await paymentCollection.aggregate([
+          // 1. Notice there is NO $match stage here. 
+          // We want every single payment document in the collection!
+          {
+            $group: {
+              _id: null, // Grouping by null means "combine everything into one giant group"
+              totalRevenue: {
+                $sum: { $toDouble: "$ebookPrice" }
+              }
+            }
+          }
+        ]).toArray();
+
+        // 2. Safely extract the number, defaulting to 0 if the platform is brand new
+        const finalRevenue = result.length > 0 ? result[0].totalRevenue : 0;
+
+        // 3. Send it back
+        res.json({ totalRevenue: finalRevenue });
+
+      } catch (error) {
+        console.error("Error calculating total platform revenue:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    });
+
+    app.delete('/api/admin/user/:id', async (req, res) => {
+      const userId = req.params.id;
+      const query = { _id: new ObjectId(userId) };
+      const result = await usersCollection.deleteOne(query);
+      res.json(result);
+    });
+
+    // app.patch('/api/admin/user/role/:id', async (req, res) => {
+    //   const userId = req.params.id;
+    //   const updatedData = req.body;
+    //   const query = { _id: new ObjectId(userId) };
+    //   const update =
+    //   {
+    //     $set:
+    //       { $role: updatedData.status }
+    //   };
+    //   const result = await usersCollection.updateOne(query, update);
+    //   res.json(result);
+    // });
 
 
     // Send a ping to confirm a successful connection
