@@ -109,6 +109,11 @@ async function run() {
           { addedBy: { $regex: req.query.search, $options: 'i' } }
         ]
       }
+
+      if (req.query.status) {
+        query.status = req.query.status;
+      }
+
       if (req.query.genre) {
         query.genre = req.query.genre
       }
@@ -125,7 +130,9 @@ async function run() {
 
 
     app.get('/api/feat-ebooks', async (req, res) => {
-      const ebooks = await ebooksCollection.find().skip(10).limit(6).toArray();
+      const query = { status: 'published' };
+      const sortOptions = { createdAt: -1 };
+      const ebooks = await ebooksCollection.find(query).sort(sortOptions).limit(6).toArray();
       res.json(ebooks);
     });
 
