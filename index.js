@@ -180,9 +180,28 @@ async function run() {
     });
 
     app.post('/api/ebooks/bookmark', async (req, res) => {
-      const bookmark = req.body;
-      const result = await bookmarksCollection.insertOne(bookmark);
-      res.json(result);
+      try {
+        const bookmark = req.body;
+
+        // 1. Check if THIS user already bookmarked THIS book
+        const existing = await bookmarksCollection.findOne({
+          user: bookmark.user,
+          ebookId: bookmark.ebookId
+        });
+
+        if (existing) {
+          // Return a clean JSON response instead of crashing
+          return res.status(409).json({ error: true, message: "Already in bookmark" });
+        }
+
+        // 2. Insert if it doesn't exist
+        const result = await bookmarksCollection.insertOne(bookmark);
+        res.status(200).json(result);
+
+      } catch (error) {
+        console.error("Bookmark Error:", error);
+        res.status(500).json({ error: true, message: "Internal server error" });
+      }
     });
 
     app.get('/api/ebooks/bookmark/:userId', async (req, res) => {
@@ -213,21 +232,65 @@ async function run() {
     })
 
     app.get('/api/purchase/:id', async (req, res) => {
+      try {
+        const id = req.params.id;
+        // console.log("Fetching purchases for:", id);
 
-      const id = req.params.id;
-      console.log(id);
-      const query = {
-        writerId: id
+        const pipeline = [
+          // match purchases where the user is either the buyer OR the writer
+          {
+            $match: {
+              $or: [{ writerId: id }, { userId: id }]
+            }
+          },
+          // convert the string writerId into a true ObjectId so it matches the user collection
+          {
+            $addFields: {
+              writerObjectId: { $toObjectId: "$writerId" }
+            }
+          },
+          // join with the "user" collection to get the writer's details
+          {
+            $lookup: {
+              from: "user", // Make sure this perfectly matches your users collection name
+              localField: "writerObjectId",
+              foreignField: "_id",
+              as: "writerDetails"
+            }
+          },
+          // flatten the array that $lookup creates
+          {
+            $unwind: {
+              path: "$writerDetails",
+              preserveNullAndEmptyArrays: true // Keeps the purchase even if the writer was deleted
+            }
+          },
+          // attach JUST the name to the root of the purchase object
+          {
+            $addFields: {
+              writerName: "$writerDetails.name" // Assumes your user object has a 'name' field
+            }
+          },
+          // 6. Clean up: remove the full user object so we don't accidentally leak passwords/emails
+          {
+            $project: {
+              writerObjectId: 0,
+              writerDetails: 0
+            }
+          }
+        ];
+
+        // Execute the pipeline
+        const purchases = await paymentCollection.aggregate(pipeline).toArray();
+
+        // Send the final data to the frontend
+        res.json(purchases);
+
+      } catch (error) {
+        console.error("Error fetching purchases:", error);
+        res.status(500).json({ message: "Internal server error" });
       }
-      const purchases = await paymentCollection.find(query).toArray();
-
-      if (purchases.length === 0) {
-        return res.json([]);
-      }
-
-      res.json(purchases);
-
-    })
+    });
 
     app.get('/api/revenue/:id', async (req, res) => {
       try {
