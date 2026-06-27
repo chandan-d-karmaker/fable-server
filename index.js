@@ -77,13 +77,14 @@ async function run() {
       next();
     }
 
+    // must be used after verifyToken middleware
     const verifyReader = async (req, res, next) => {
       if (req.user?.role !== 'reader') {
         return res.status(403).send({ message: 'forbidden access' })
       }
       next();
     }
-
+    // must be used after verifyToken middleware
     const verifyWriter = async (req, res, next) => {
       if (req.user?.role !== 'writer') {
         return res.status(403).send({ message: 'forbidden access' })
@@ -99,6 +100,7 @@ async function run() {
       next();
     }
 
+    // get all ebooks
     app.get('/api/ebooks', async (req, res) => {
       console.log('server side q', req.query);
       const query = {};
@@ -143,7 +145,7 @@ async function run() {
       }
     });
 
-
+    // get featured ebooks (latest published)
     app.get('/api/feat-ebooks', async (req, res) => {
       const query = { status: 'published' };
       const sortOptions = { createdAt: -1 };
@@ -151,22 +153,22 @@ async function run() {
       res.json(ebooks);
     });
 
+    // get top 3 writers with sales
     app.get('/api/top-writers', async (req, res) => {
       try {
         const topWriters = await usersCollection.aggregate([
-          // 1. Get only writers
+
           { $match: { role: "writer" } },
 
-          // 2. Lookup with a pipeline to force string-to-string comparison
           {
             $lookup: {
               from: "payments",
-              let: { writer_id: { $toString: "$_id" } }, // Convert user _id to string
+              let: { writer_id: { $toString: "$_id" } },
+
               pipeline: [
                 {
                   $match: {
                     $expr: {
-                      // Compare payment writerId (converted to string) with the let variable
                       $eq: [{ $toString: "$writerId" }, "$$writer_id"]
                     }
                   }
@@ -176,7 +178,6 @@ async function run() {
             }
           },
 
-          // 3. Calculate total revenue and total sales
           {
             $project: {
               writerName: "$name",
@@ -193,7 +194,6 @@ async function run() {
             }
           },
 
-          // 4. Sort and Limit
           { $sort: { totalRevenue: -1 } },
           { $limit: 3 }
         ]).toArray();
@@ -205,17 +205,20 @@ async function run() {
       }
     });
 
+    // get all writers (for admin)
     app.get('/api/writers', verifyToken, verifyAdmin, async (req, res) => {
       const query = { role: "writer" };
       const writers = await usersCollection.find(query).toArray();
       res.json(writers);
     });
 
+    // get all users (for admin)
     app.get('/api/users', verifyToken, verifyAdmin, async (req, res) => {
       const users = await usersCollection.find().toArray();
       res.json(users);
     });
 
+    // publishing a new book (for writers)
     app.post('/api/ebooks', verifyToken, verifyWriter, async (req, res) => {
       const ebook = req.body;
       const newEbook = {
@@ -226,6 +229,7 @@ async function run() {
       res.json(result);
     });
 
+    // get all ebooks of a writer
     app.get('/api/ebooks/writer/:id', verifyToken, async (req, res) => {
       const writerId = req.params.id;
       const query = { addedBy: writerId };
@@ -233,6 +237,7 @@ async function run() {
       res.json(ebooks);
     });
 
+    // get ebook details by id
     app.get('/api/ebooks/:id', async (req, res) => {
       const ebookId = req.params.id;
       const query = { _id: new ObjectId(ebookId) };
@@ -240,6 +245,7 @@ async function run() {
       res.json(ebook);
     });
 
+    // update ebook info (for writer)
     app.patch('/api/ebooks/:id', verifyToken, verifyWriter, async (req, res) => {
       const ebookId = req.params.id;
       const updatedData = req.body;
@@ -249,22 +255,20 @@ async function run() {
       res.json(result);
     });
 
+    // add ebook to bookmark
     app.post('/api/ebooks/bookmark', verifyToken, async (req, res) => {
       try {
         const bookmark = req.body;
 
-        // 1. Check if THIS user already bookmarked THIS book
         const existing = await bookmarksCollection.findOne({
           user: bookmark.user,
           ebookId: bookmark.ebookId
         });
 
         if (existing) {
-          // Return a clean JSON response instead of crashing
           return res.status(409).json({ error: true, message: "Already in bookmark" });
         }
 
-        // 2. Insert if it doesn't exist
         const result = await bookmarksCollection.insertOne(bookmark);
         res.status(200).json(result);
 
@@ -274,6 +278,7 @@ async function run() {
       }
     });
 
+    // get bookmarks of a signle user
     app.get('/api/ebooks/bookmark/:userId', verifyToken, async (req, res) => {
       const userId = req.params.userId;
       const query = { user: userId };
@@ -281,13 +286,15 @@ async function run() {
       res.json(bookmarks);
     });
 
-    app.delete('/api/ebooks/:id', verifyToken, verifyAdmin, async (req, res) => {
+    // delete ebook (for both writer and admin)
+    app.delete('/api/ebooks/:id', verifyToken,  async (req, res) => {
       const ebookId = req.params.id;
       const query = { _id: new ObjectId(ebookId) };
       const result = await ebooksCollection.deleteOne(query);
       res.json(result);
     });
 
+    // add payment info to the db
     app.post('/api/payments', verifyToken, async (req, res) => {
       const data = req.body;
       const paymentInfo = {
@@ -296,86 +303,26 @@ async function run() {
       }
 
       const result = await paymentCollection.insertOne(paymentInfo);
-
       res.json(result);
-
     })
 
+    // get payment info for a single user
     app.get('/api/purchase/:id', verifyToken, async (req, res) => {
       try {
         const id = req.params.id;
         // console.log("Fetching purchases for:", id);
 
         const pipeline = [
-          // match purchases where the user is either the buyer OR the writer
           {
             $match: {
               $or: [{ writerId: id }, { userId: id }]
             }
           },
-          // convert the string writerId into a true ObjectId so it matches the user collection
           {
             $addFields: {
               writerObjectId: { $toObjectId: "$writerId" }
             }
           },
-          // join with the "user" collection to get the writer's details
-          {
-            $lookup: {
-              from: "user", // Make sure this perfectly matches your users collection name
-              localField: "writerObjectId",
-              foreignField: "_id",
-              as: "writerDetails"
-            }
-          },
-          // flatten the array that $lookup creates
-          {
-            $unwind: {
-              path: "$writerDetails",
-              preserveNullAndEmptyArrays: true // Keeps the purchase even if the writer was deleted
-            }
-          },
-          // attach JUST the name to the root of the purchase object
-          {
-            $addFields: {
-              writerName: "$writerDetails.name" // Assumes your user object has a 'name' field
-            }
-          },
-          // 6. Clean up: remove the full user object so we don't accidentally leak passwords/emails
-          {
-            $project: {
-              writerObjectId: 0,
-              writerDetails: 0
-            }
-          }
-        ];
-
-        // Execute the pipeline
-        const purchases = await paymentCollection.aggregate(pipeline).toArray();
-
-        // Send the final data to the frontend
-        res.json(purchases);
-
-      } catch (error) {
-        console.error("Error fetching purchases:", error);
-        res.status(500).json({ message: "Internal server error" });
-      }
-    });
-
-    app.get('/api/admin/all-purchases', verifyToken, verifyAdmin, async (req, res) => {
-      try {
-        // console.log("Fetching all platform purchases for Admin...");
-
-        const pipeline = [
-          // 1. Notice there is NO $match stage here. We want everything!
-
-          // 2. Convert the string writerId into a true ObjectId
-          {
-            $addFields: {
-              writerObjectId: { $toObjectId: "$writerId" }
-            }
-          },
-          // 3. Join with the "user" collection to get the writer's details
           {
             $lookup: {
               from: "user",
@@ -384,27 +331,78 @@ async function run() {
               as: "writerDetails"
             }
           },
-          // 4. Flatten the array that $lookup creates
+          {
+            $unwind: {
+              path: "$writerDetails",
+              preserveNullAndEmptyArrays: true 
+            }
+          },
+          
+          {
+            $addFields: {
+              writerName: "$writerDetails.name"
+            }
+          },
+
+          {
+            $project: {
+              writerObjectId: 0,
+              writerDetails: 0
+            }
+          }
+        ];
+
+        const purchases = await paymentCollection.aggregate(pipeline).toArray();
+        res.json(purchases);
+
+      } catch (error) {
+        console.error("Error fetching purchases:", error);
+        res.status(500).json({ message: "Internal server error" });
+      }
+    });
+
+    // get all payment history (for admin)
+    app.get('/api/admin/all-purchases', verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        // console.log("Fetching all platform purchases for Admin...");
+
+        const pipeline = [
+
+          {
+            $addFields: {
+              writerObjectId: { $toObjectId: "$writerId" }
+            }
+          },
+
+          {
+            $lookup: {
+              from: "user",
+              localField: "writerObjectId",
+              foreignField: "_id",
+              as: "writerDetails"
+            }
+          },
+
           {
             $unwind: {
               path: "$writerDetails",
               preserveNullAndEmptyArrays: true
             }
           },
-          // 5. Attach JUST the name to the root of the purchase object
+
           {
             $addFields: {
               writerName: "$writerDetails.name"
             }
           },
-          // 6. Clean up: remove the full user object
+
           {
             $project: {
               writerObjectId: 0,
               writerDetails: 0
             }
           },
-          // 7. NEW: Sort by newest purchases first (descending order)
+
           {
             $sort: {
               createdAt: -1
@@ -412,10 +410,8 @@ async function run() {
           }
         ];
 
-        // Execute the pipeline
-        const allPurchases = await paymentCollection.aggregate(pipeline).toArray();
 
-        // Send the final data to the frontend
+        const allPurchases = await paymentCollection.aggregate(pipeline).toArray();
         res.json(allPurchases);
 
       } catch (error) {
@@ -424,6 +420,7 @@ async function run() {
       }
     });
 
+    // get total income of a writer (for writer)
     app.get('/api/revenue/:id', verifyToken, verifyWriter, async (req, res) => {
       try {
         const writerId = req.params.id;
@@ -456,6 +453,7 @@ async function run() {
       }
     });
 
+    // update ebook publish status (for admin)
     app.patch('/api/ebooks/status/:id', verifyToken, verifyAdmin, async (req, res) => {
       const ebookId = req.params.id;
       const updatedData = req.body;
@@ -469,6 +467,7 @@ async function run() {
       res.json(result);
     });
 
+    // check if a ebook is already purchased (returns boolean)
     app.get('/api/purchases/check', verifyToken, async (req, res) => {
       try {
         const { userId, ebookId } = req.query;
@@ -490,13 +489,12 @@ async function run() {
       }
     });
 
+    // get total income form the site (for admin)
     app.get('/api/admin/total-revenue', async (req, res) => {
       try {
         // console.log("Calculating total platform revenue for Admin...");
 
         const result = await paymentCollection.aggregate([
-          // 1. Notice there is NO $match stage here. 
-          // We want every single payment document in the collection!
           {
             $group: {
               _id: null,
@@ -507,10 +505,7 @@ async function run() {
           }
         ]).toArray();
 
-        // 2. Safely extract the number, defaulting to 0 if the platform is brand new
         const finalRevenue = result.length > 0 ? result[0].totalRevenue : 0;
-
-        // 3. Send it back
         res.json({ totalRevenue: finalRevenue });
 
       } catch (error) {
@@ -519,6 +514,7 @@ async function run() {
       }
     });
 
+    // delete a user (for admin)
     app.delete('/api/admin/user/:id', verifyToken, verifyAdmin, async (req, res) => {
       const userId = req.params.id;
       const query = { _id: new ObjectId(userId) };
@@ -526,6 +522,7 @@ async function run() {
       res.json(result);
     });
 
+    // update a users role (for admin)
     app.patch('/api/admin/user/role/:id', verifyToken, verifyAdmin, async (req, res) => {
       const userId = req.params.id;
       const updatedData = req.body;
