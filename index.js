@@ -40,34 +40,41 @@ async function run() {
     const paymentCollection = db.collection("payments");
     const sessionCollection = db.collection('session');
 
+    // verification related
     const verifyToken = async (req, res, next) => {
 
-      const authHeader = req?.headers?.authorization;
-
+      const authHeader = req.headers?.authorization;
       if (!authHeader) {
-        return res.status(401).json({ message: 'unauthorized' })
+        return res.status(401).send({ message: 'unauthorized access' })
       }
-      const token = authHeader.split(" ")[1]
+
+      const token = authHeader.split(' ')[1]
+
       if (!token) {
-        return res.status(401).json({ message: 'unauthorized' })
-      }
-      console.log(token);
-
-      try {
-
-        // code from support
-        const secret = new TextEncoder().encode(process.env.JWT_SECRET);
-        const { payload } = await jwtVerify(token, secret)
-        console.log(payload);
-        // code from support
-
-        req.user = payload.user;
-        next()
-      } catch (error) {
-        console.log(error)
-        return res.status(403).json({ message: "Forbidden" })
+        return res.status(401).send({ message: 'unauthorized access' })
       }
 
+      const query = { token: token }
+      const session = await sessionCollection.findOne(query);
+
+      if (!session) {
+        return res.status(401).send({ message: 'unauthorized access' })
+      }
+
+      const userId = session.userId;
+
+
+      const userQuery = {
+        _id: new ObjectId(userId)
+      }
+
+      const user = await usersCollection.findOne(userQuery);
+      if (!user) {
+        return res.status(401).send({ message: 'unauthorized access' })
+      }
+      // set data in the req object
+      req.user = user;
+      next();
     }
 
     const verifyReader = async (req, res, next) => {
