@@ -23,10 +23,10 @@ const client = new MongoClient(uri, {
   }
 });
 
-const JWKS = createRemoteJWKSet(
-  new URL(`${process.env.FRONTEND_URL}/api/auth/jwks`)
-  //   http://localhost:3000/api/auth/jwks
-)
+// const JWKS = createRemoteJWKSet(
+//   new URL(`${process.env.FRONTEND_URL}/api/auth/jwks`)
+//   //   http://localhost:3000/api/auth/jwks
+// )
 
 async function run() {
   try {
@@ -54,27 +54,21 @@ async function run() {
       console.log(token);
 
       try {
-        const { payload } = await jwtVerify(token, JWKS)
-        // console.log(payload);
 
-        const userId = payload.id;
+        // code from support
+        const secret = new TextEncoder().encode(process.env.JWT_SECRET);
+        const { payload } = await jwtVerify(token, secret)
+        console.log(payload);
+        // code from support
 
-        const userQuery = {
-          _id: new ObjectId(userId)
-        }
-        const user = await usersCollection.findOne(userQuery);
-        if (!user) {
-          return res.status(401).send({ message: 'unauthorized access' })
-        }
-        // set data in the req object
-        req.user = user;
+        req.user = payload.user;
         next()
       } catch (error) {
+        console.log(error)
         return res.status(403).json({ message: "Forbidden" })
       }
 
     }
-
 
     const verifyReader = async (req, res, next) => {
       if (req.user?.role !== 'reader') {
@@ -99,33 +93,47 @@ async function run() {
     }
 
     app.get('/api/ebooks', async (req, res) => {
-      console.log('server side q', req.query)
+      console.log('server side q', req.query);
       const query = {};
 
-      // book filter related query
+      // 1. Filtering
       if (req.query.search) {
         query.$or = [
           { title: { $regex: req.query.search, $options: 'i' } },
           { addedBy: { $regex: req.query.search, $options: 'i' } }
-        ]
+        ];
       }
+      if (req.query.status) query.status = req.query.status;
+      if (req.query.genre) query.genre = req.query.genre;
 
-      if (req.query.status) {
-        query.status = req.query.status;
-      }
-
-      if (req.query.genre) {
-        query.genre = req.query.genre
-      }
+      // 2. Sorting
       let sortOptions = {};
-      if (req.query.sort === 'new') {
-        sortOptions = { createdAt: -1 }; // -1 means Descending (Newest first)
-      } else if (req.query.sort === 'old') {
-        sortOptions = { createdAt: 1 };  // 1 means Ascending (Oldest first)
+      if (req.query.sort === 'new') sortOptions = { createdAt: -1 };
+      else if (req.query.sort === 'old') sortOptions = { createdAt: 1 };
+
+      try {
+        const total = await ebooksCollection.countDocuments(query);
+
+        // 3. Initialize the cursor with filters and sorting
+        let cursor = ebooksCollection.find(query).sort(sortOptions);
+
+        // 4. Conditionally apply pagination ONLY if requested
+        if (req.query.page) {
+          const page = parseInt(req.query.page) || 1;
+          const perPage = parseInt(req.query.perPage) || 8;
+          const skipItems = (page - 1) * perPage;
+
+          // Chain the skip and limit to the existing cursor
+          cursor = cursor.skip(skipItems).limit(perPage);
+        }
+
+        const ebooks = await cursor.toArray();
+
+        return res.json({ total, ebooks });
+      } catch (error) {
+        console.error("Database error:", error);
+        res.status(500).json({ error: "Failed to fetch ebooks" });
       }
-      const cursor = ebooksCollection.find(query).sort(sortOptions);
-      const ebooks = await cursor.toArray();
-      res.json(ebooks);
     });
 
 
@@ -190,18 +198,18 @@ async function run() {
       }
     });
 
-    app.get('/api/writers', async (req, res) => {
+    app.get('/api/writers', verifyToken, verifyAdmin, async (req, res) => {
       const query = { role: "writer" };
       const writers = await usersCollection.find(query).toArray();
       res.json(writers);
     });
 
-    app.get('/api/users', async (req, res) => {
+    app.get('/api/users', verifyToken, verifyAdmin, async (req, res) => {
       const users = await usersCollection.find().toArray();
       res.json(users);
     });
 
-    app.post('/api/ebooks', async (req, res) => {
+    app.post('/api/ebooks', verifyToken, verifyWriter, async (req, res) => {
       const ebook = req.body;
       const newEbook = {
         ...ebook,
@@ -211,7 +219,7 @@ async function run() {
       res.json(result);
     });
 
-    app.get('/api/ebooks/writer/:id', async (req, res) => {
+    app.get('/api/ebooks/writer/:id', verifyToken, async (req, res) => {
       const writerId = req.params.id;
       const query = { addedBy: writerId };
       const ebooks = await ebooksCollection.find(query).toArray();
@@ -225,7 +233,7 @@ async function run() {
       res.json(ebook);
     });
 
-    app.patch('/api/ebooks/:id', async (req, res) => {
+    app.patch('/api/ebooks/:id', verifyToken, verifyWriter, async (req, res) => {
       const ebookId = req.params.id;
       const updatedData = req.body;
       const query = { _id: new ObjectId(ebookId) };
@@ -234,7 +242,7 @@ async function run() {
       res.json(result);
     });
 
-    app.post('/api/ebooks/bookmark', async (req, res) => {
+    app.post('/api/ebooks/bookmark', verifyToken, async (req, res) => {
       try {
         const bookmark = req.body;
 
@@ -259,21 +267,21 @@ async function run() {
       }
     });
 
-    app.get('/api/ebooks/bookmark/:userId', async (req, res) => {
+    app.get('/api/ebooks/bookmark/:userId', verifyToken, async (req, res) => {
       const userId = req.params.userId;
       const query = { user: userId };
       const bookmarks = await bookmarksCollection.find(query).toArray();
       res.json(bookmarks);
     });
 
-    app.delete('/api/ebooks/:id', async (req, res) => {
+    app.delete('/api/ebooks/:id', verifyToken, verifyAdmin, async (req, res) => {
       const ebookId = req.params.id;
       const query = { _id: new ObjectId(ebookId) };
       const result = await ebooksCollection.deleteOne(query);
       res.json(result);
     });
 
-    app.post('/api/payments', async (req, res) => {
+    app.post('/api/payments', verifyToken, async (req, res) => {
       const data = req.body;
       const paymentInfo = {
         ...data,
@@ -286,7 +294,7 @@ async function run() {
 
     })
 
-    app.get('/api/purchase/:id', async (req, res) => {
+    app.get('/api/purchase/:id', verifyToken, async (req, res) => {
       try {
         const id = req.params.id;
         // console.log("Fetching purchases for:", id);
@@ -347,7 +355,7 @@ async function run() {
       }
     });
 
-    app.get('/api/admin/all-purchases', async (req, res) => {
+    app.get('/api/admin/all-purchases', verifyToken, verifyAdmin, async (req, res) => {
       try {
         // console.log("Fetching all platform purchases for Admin...");
 
@@ -409,7 +417,7 @@ async function run() {
       }
     });
 
-    app.get('/api/revenue/:id', async (req, res) => {
+    app.get('/api/revenue/:id', verifyToken, verifyWriter, async (req, res) => {
       try {
         const writerId = req.params.id;
         // console.log("Calculating revenue for writer:", writerId);
@@ -441,7 +449,7 @@ async function run() {
       }
     });
 
-    app.patch('/api/ebooks/status/:id', async (req, res) => {
+    app.patch('/api/ebooks/status/:id', verifyToken, verifyAdmin, async (req, res) => {
       const ebookId = req.params.id;
       const updatedData = req.body;
       const query = { _id: new ObjectId(ebookId) };
@@ -454,7 +462,7 @@ async function run() {
       res.json(result);
     });
 
-    app.get('/api/purchases/check', async (req, res) => {
+    app.get('/api/purchases/check', verifyToken, async (req, res) => {
       try {
         const { userId, ebookId } = req.query;
 
@@ -484,7 +492,7 @@ async function run() {
           // We want every single payment document in the collection!
           {
             $group: {
-              _id: null, // Grouping by null means "combine everything into one giant group"
+              _id: null,
               totalRevenue: {
                 $sum: { $toDouble: "$ebookPrice" }
               }
@@ -504,25 +512,25 @@ async function run() {
       }
     });
 
-    app.delete('/api/admin/user/:id', async (req, res) => {
+    app.delete('/api/admin/user/:id', verifyToken, verifyAdmin, async (req, res) => {
       const userId = req.params.id;
       const query = { _id: new ObjectId(userId) };
       const result = await usersCollection.deleteOne(query);
       res.json(result);
     });
 
-    // app.patch('/api/admin/user/role/:id', async (req, res) => {
-    //   const userId = req.params.id;
-    //   const updatedData = req.body;
-    //   const query = { _id: new ObjectId(userId) };
-    //   const update =
-    //   {
-    //     $set:
-    //       { $role: updatedData.status }
-    //   };
-    //   const result = await usersCollection.updateOne(query, update);
-    //   res.json(result);
-    // });
+    app.patch('/api/admin/user/role/:id', verifyToken, verifyAdmin, async (req, res) => {
+      const userId = req.params.id;
+      const updatedData = req.body;
+      const query = { _id: new ObjectId(userId) };
+      const update =
+      {
+        $set:
+          { role: updatedData.role }
+      };
+      const result = await usersCollection.updateOne(query, update);
+      res.json(result);
+    });
 
 
     // Send a ping to confirm a successful connection
